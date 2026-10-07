@@ -4,7 +4,7 @@ export const uploadProductImage = async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ message: "Image is required" });
     if (!req.file.imageUrl) {
-      throw new Error("The upload middleware did not provide an image URL.");
+      return res.status(500).json({ message: "The image could not be stored." });
     }
     res.status(201).json({ image: req.file.imageUrl });
   } catch (error) {

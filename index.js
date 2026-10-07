@@ -7,11 +7,13 @@ import userRoutes from "./routes/userRoutes.js";
 import productRoutes from "./routes/productRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import categoryRoutes from "./routes/categoryRoutes.js";
+import { getUploadedImage } from "./config/imageUpload.js";
 import { fileURLToPath } from "url";
 import path from "path";
 
 const app = express();
 app.use("/uploads", express.static("uploads"))
+app.get("/uploads/:id", getUploadedImage);
 
 dotenv.config();
 
@@ -26,12 +28,6 @@ app.use("/orders", orderRoutes);
 app.use("/categories", categoryRoutes);
 app.use("/category", categoryRoutes);
 
-
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
 
 // Test blog POST
 app.post("/blog", (req, res) => {
@@ -75,8 +71,11 @@ app.get("/courses/:name", (req, res) => {
 app.use((error, req, res, next) => {
   console.error(error);
   const isClientError = ["ValidationError", "CastError"].includes(error.name);
-  res.status(isClientError ? 400 : 500).json({
-    message: isClientError ? error.message : "Server error",
+  const isUploadLimitError = error.code === "LIMIT_FILE_SIZE";
+  const isImageValidationError = error.message === "Upload a JPEG, PNG, WebP, or GIF image.";
+  const statusCode = isUploadLimitError ? 413 : isImageValidationError ? 400 : isClientError ? 400 : 500;
+  res.status(statusCode).json({
+    message: statusCode < 500 ? error.message : "Server error",
   });
 });
 
@@ -92,4 +91,3 @@ if (isMainModule) {
     });
   });
 }
-

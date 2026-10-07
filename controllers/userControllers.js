@@ -35,7 +35,7 @@ export const createUser = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     if (req.file && !req.file.imageUrl) {
-        throw new Error("The upload middleware did not provide an image URL.");
+        return res.status(500).json({ message: "The avatar could not be stored." });
     }
     const avatar = req.file ? req.file.imageUrl : avatarUrl || "";
     const createdUser = await User.create({

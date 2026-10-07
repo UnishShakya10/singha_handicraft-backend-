@@ -10,11 +10,7 @@ import {
 } from "../controllers/productControllers.js";
 import { authMiddleware } from "../middleware/authMiddleware.js";
 import { adminMiddleware } from "../middleware/adminMiddleware.js";
-import {
-  imageUpload,
-  requireImageStorage,
-  setUploadedImageUrl,
-} from "../config/imageUpload.js";
+import { imageUpload, persistUploadedImage } from "../config/imageUpload.js";
 
 const router = express.Router();
 
@@ -26,9 +22,8 @@ router.post(
   "/upload-image",
   authMiddleware,
   adminMiddleware,
-  requireImageStorage,
   imageUpload.single("image"),
-  setUploadedImageUrl,
+  persistUploadedImage,
   uploadProductImage
 );
 router.put("/:id", authMiddleware, adminMiddleware, updateProduct);

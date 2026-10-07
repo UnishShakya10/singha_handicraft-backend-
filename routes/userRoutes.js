@@ -13,17 +13,15 @@ import { authMiddleware } from "../middleware/authMiddleware.js"
 import { adminMiddleware } from "../middleware/adminMiddleware.js"
 import {
   imageUpload,
-  requireImageStorage,
-  setUploadedImageUrl,
+  persistUploadedImage,
 } from "../config/imageUpload.js"
 
 const router = express.Router()
 
 router.post(
   "/create",
-  requireImageStorage,
   imageUpload.single("avatar"),
-  setUploadedImageUrl,
+  persistUploadedImage,
   createUser
 )
 

@@ -1,56 +1,86 @@
-import "dotenv/config";
+import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 import multer from "multer";
-import { v2 as cloudinary } from "cloudinary";
-import { CloudinaryStorage } from "multer-storage-cloudinary";
+import mongoose from "mongoose";
+import { GridFSBucket, ObjectId } from "mongodb";
 
-const cloudinaryConfig = {
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+const bucketName = "uploads";
+const fileExtensions = {
+  "image/gif": ".gif",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
 };
-const configuredValues = Object.values(cloudinaryConfig).filter(Boolean).length;
+const maximumImageSize = 10 * 1024 * 1024;
 
-if (configuredValues > 0 && configuredValues < 3) {
-  throw new Error(
-    "Configure CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET together."
-  );
-}
+const getBucket = () => {
+  if (!mongoose.connection.db) {
+    throw new Error("The image database is not connected.");
+  }
+  return new GridFSBucket(mongoose.connection.db, { bucketName });
+};
 
-export const cloudinaryConfigured = configuredValues === 3;
+export const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: maximumImageSize },
+  fileFilter: (req, file, callback) => {
+    if (!Object.hasOwn(fileExtensions, file.mimetype)) {
+      return callback(new Error("Upload a JPEG, PNG, WebP, or GIF image."));
+    }
+    callback(null, true);
+  },
+});
 
-if (cloudinaryConfigured) {
-  cloudinary.config({ ...cloudinaryConfig, secure: true });
-}
+export const persistUploadedImage = async (req, res, next) => {
+  if (!req.file) return next();
 
-const storage = cloudinaryConfigured
-  ? new CloudinaryStorage({
-      cloudinary,
-      params: {
-        folder: "singha-handicraft",
-        allowed_formats: ["jpg", "jpeg", "png", "webp", "gif"],
-        resource_type: "image",
-      },
-    })
-  : undefined;
-
-export const imageUpload = storage
-  ? multer({ storage })
-  : multer({ dest: "uploads/" });
-
-export const requireImageStorage = (req, res, next) => {
-  if (process.env.NODE_ENV === "production" && !cloudinaryConfigured) {
-    return res.status(503).json({
-      message: "Image uploads are unavailable until Cloudinary is configured.",
+  try {
+    const bucket = getBucket();
+    const extension = fileExtensions[req.file.mimetype];
+    const filename = `${randomUUID()}${extension}`;
+    const uploadStream = bucket.openUploadStream(filename, {
+      contentType: req.file.mimetype,
+      metadata: { contentType: req.file.mimetype },
     });
+
+    await new Promise((resolve, reject) => {
+      uploadStream.once("error", reject);
+      uploadStream.once("finish", resolve);
+      Readable.from([req.file.buffer]).pipe(uploadStream);
+    });
+
+    req.file.imageUrl = `/uploads/${uploadStream.id.toString()}`;
+    next();
+  } catch (error) {
+    next(error);
   }
-  next();
 };
 
-export const setUploadedImageUrl = (req, res, next) => {
-  if (req.file) {
-    req.file.imageUrl = cloudinaryConfigured
-      ? req.file.path
-      : `/uploads/${req.file.filename}`;
+export const getUploadedImage = async (req, res, next) => {
+  if (!ObjectId.isValid(req.params.id) || req.params.id.length !== 24) {
+    return res.status(404).json({ message: "Image not found." });
   }
-  next();
+
+  try {
+    const bucket = getBucket();
+    const [file] = await bucket
+      .find({ _id: new ObjectId(req.params.id) })
+      .limit(1)
+      .toArray();
+
+    if (!file) return res.status(404).json({ message: "Image not found." });
+
+    res.set({
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Content-Length": String(file.length),
+      "Content-Type": file.metadata?.contentType || "application/octet-stream",
+      "X-Content-Type-Options": "nosniff",
+    });
+
+    const downloadStream = bucket.openDownloadStream(file._id);
+    downloadStream.once("error", next);
+    downloadStream.pipe(res);
+  } catch (error) {
+    next(error);
+  }
 };
