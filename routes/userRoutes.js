@@ -1,5 +1,4 @@
 import express from "express"
-import multer from "multer"
 
 import {
   createUser,
@@ -12,12 +11,21 @@ import {
 } from "../controllers/userControllers.js"
 import { authMiddleware } from "../middleware/authMiddleware.js"
 import { adminMiddleware } from "../middleware/adminMiddleware.js"
+import {
+  imageUpload,
+  requireImageStorage,
+  setUploadedImageUrl,
+} from "../config/imageUpload.js"
 
 const router = express.Router()
 
-const upload = multer({ dest: "uploads/" })
-
-router.post("/create", upload.single("avatar"), createUser)
+router.post(
+  "/create",
+  requireImageStorage,
+  imageUpload.single("avatar"),
+  setUploadedImageUrl,
+  createUser
+)
 
 router.post("/login", login)
 router.get("/me", authMiddleware, getMe)

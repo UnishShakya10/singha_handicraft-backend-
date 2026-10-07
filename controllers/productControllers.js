@@ -3,7 +3,10 @@ import Product from "../model/Product.js";
 export const uploadProductImage = async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ message: "Image is required" });
-    res.status(201).json({ image: `/uploads/${req.file.filename}` });
+    if (!req.file.imageUrl) {
+      throw new Error("The upload middleware did not provide an image URL.");
+    }
+    res.status(201).json({ image: req.file.imageUrl });
   } catch (error) {
     next(error);
   }
