@@ -44,7 +44,18 @@ const orderSchema = new mongoose.Schema(
       address: { type: String, required: true },
       city: { type: String, required: true },
       state: { type: String, required: true },
-      postalCode: { type: String, required: true },
+      postalCode: { type: String, default: "" },
+    },
+    invoiceNumber: {
+      type: String,
+      required: true,
+      unique: true,
+      sparse: true,
+    },
+    subtotal: {
+      type: Number,
+      required: true,
+      min: 0,
     },
     totalAmount: {
       type: Number,
@@ -53,18 +64,41 @@ const orderSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["cod", "online"],
+      enum: ["cod","bank","wallet"],
       default: "cod",
     },
+
+     // Transaction reference for bank or wallet payments
+    paymentReference: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     paymentStatus: {
       type: String,
       enum: ["pending", "paid", "failed"],
       default: "pending",
     },
+
+    inventoryStatus: {
+      type: String,
+      enum: ["not_reserved", "reserved", "restored"],
+      default: "not_reserved",
+    },
+
     status: {
       type: String,
-      enum: ["placed", "processing", "shipped", "delivered", "cancelled"],
-      default: "placed",
+      enum: [
+        "pending",
+        "confirmed",
+        "delivered",
+        "cancelled",
+        "placed",
+        "processing",
+        "shipped",
+      ],
+      default: "pending",
     },
   },
   { timestamps: true }
