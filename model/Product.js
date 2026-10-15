@@ -32,6 +32,43 @@ const productSchema = new mongoose.Schema(
       min: 0,
       default: 0,
     },
+
+        variants: {
+      type: [
+        {
+          finish: {
+            type: String,
+            required: true,
+            trim: true,
+          },
+          price: {
+            type: Number,
+            required: true,
+            min: 0,
+          },
+          stock: {
+            type: Number,
+            required: true,
+            min: 0,
+            default: 0,
+          },
+          sku: {
+            type: String,
+            trim: true,
+          },
+          images: {
+            type: [String],
+            default: [],
+          },
+          isActive: {
+            type: Boolean,
+            default: true,
+          },
+        },
+      ],
+      default: [],
+    },
+    
     images: {
       type: [String],
       default: [],

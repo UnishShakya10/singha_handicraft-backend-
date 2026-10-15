@@ -230,3 +230,89 @@ export const getOrderById = async (req, res, next) => {
     next(error);
   }
 };
+
+
+export const deleteOrder = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const order = await Order.findById(req.params.id).session(session);
+      if (!order) throw httpError(404, "Order not found");
+
+      // Give stock back if this order still holds reserved stock
+      // (not for delivered orders, since those items were sold)
+      const shouldRestoreStock =
+        order.inventoryStatus === "reserved" && order.status !== "delivered";
+
+      if (shouldRestoreStock) {
+        const quantities = new Map();
+        for (const item of order.items) {
+          const productId = String(item.product);
+          quantities.set(productId, (quantities.get(productId) || 0) + item.quantity);
+        }
+        for (const [productId, quantity] of quantities) {
+          await Product.updateOne(
+            { _id: productId },
+            { $inc: { stock: quantity } },
+            { session }
+          );
+        }
+      }
+
+      await Order.deleteOne({ _id: order._id }).session(session);
+    });
+    res.json({ message: "Order deleted" });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message });
+    next(error);
+  } finally {
+    await session.endSession();
+  }
+};
+
+export const cancelMyOrder = async (req, res, next) => {
+  const session = await mongoose.startSession();
+  try {
+    let cancelledOrder;
+    await session.withTransaction(async () => {
+      // Only finds the order if it belongs to the logged-in user
+      const order = await Order.findOne({
+        _id: req.params.id,
+        user: req.user.id,
+      }).session(session);
+
+      if (!order) throw httpError(404, "Order not found");
+
+      const isPending = ["pending", "placed"].includes(order.status);
+      if (!isPending) {
+        throw httpError(409, "Only pending orders can be cancelled.");
+      }
+
+      if (order.inventoryStatus === "reserved") {
+        const quantities = new Map();
+        for (const item of order.items) {
+          const productId = String(item.product);
+          quantities.set(productId, (quantities.get(productId) || 0) + item.quantity);
+        }
+        for (const [productId, quantity] of quantities) {
+          await Product.updateOne(
+            { _id: productId },
+            { $inc: { stock: quantity } },
+            { session }
+          );
+        }
+        order.inventoryStatus = "restored";
+      }
+
+      order.status = "cancelled";
+      await order.save({ session });
+      cancelledOrder = order;
+    });
+    res.json(cancelledOrder);
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message });
+    next(error);
+  } finally {
+    await session.endSession();
+  }
+};

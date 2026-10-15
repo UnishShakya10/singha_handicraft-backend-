@@ -7,6 +7,38 @@ const parseStock = (value) => {
   return Number.isSafeInteger(stock) && stock >= 0 ? stock : null;
 };
 
+const validateVariants = (variants) => {
+  if (variants === undefined) return null;
+
+  if (!Array.isArray(variants)) {
+    return "Variants must be an array.";
+  }
+
+  for (const variant of variants) {
+    if (!variant.finish?.trim()) {
+      return "Every variant must have a finish.";
+    }
+
+    if (
+      typeof variant.price !== "number" ||
+      !Number.isFinite(variant.price) ||
+      variant.price < 0
+    ) {
+      return "Every variant must have a valid non-negative price.";
+    }
+
+    const stock = parseStock(variant.stock ?? 0);
+
+    if (stock === null) {
+      return "Variant stock must be a non-negative whole number.";
+    }
+
+    variant.stock = stock;
+  }
+
+  return null;
+};
+
 export const uploadProductImage = async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ message: "Image is required" });
@@ -59,10 +91,24 @@ export const getProductById = async (req, res, next) => {
 export const createProduct = async (req, res, next) => {
   try {
     const stock = parseStock(req.body.stock ?? 0);
+
     if (stock === null) {
-      return res.status(400).json({ message: "Stock must be a non-negative whole number." });
+      return res.status(400).json({
+        message: "Stock must be a non-negative whole number.",
+      });
     }
-    const product = await Product.create({ ...req.body, stock });
+
+    const variantError = validateVariants(req.body.variants);
+
+    if (variantError) {
+      return res.status(400).json({ message: variantError });
+    }
+
+    const product = await Product.create({
+      ...req.body,
+      stock,
+    });
+
     res.status(201).json(product);
   } catch (error) {
     next(error);
@@ -72,18 +118,38 @@ export const createProduct = async (req, res, next) => {
 export const updateProduct = async (req, res, next) => {
   try {
     const updates = { ...req.body };
+
     if (Object.prototype.hasOwnProperty.call(updates, "stock")) {
       const stock = parseStock(updates.stock);
+
       if (stock === null) {
-        return res.status(400).json({ message: "Stock must be a non-negative whole number." });
+        return res.status(400).json({
+          message: "Stock must be a non-negative whole number.",
+        });
       }
+
       updates.stock = stock;
     }
-    const product = await Product.findByIdAndUpdate(req.params.id, updates, {
-      new: true,
-      runValidators: true,
-    });
-    if (!product) return res.status(404).json({ message: "Product not found" });
+
+    const variantError = validateVariants(updates.variants);
+
+    if (variantError) {
+      return res.status(400).json({ message: variantError });
+    }
+
+    const product = await Product.findByIdAndUpdate(
+      req.params.id,
+      updates,
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
     res.json(product);
   } catch (error) {
     next(error);
