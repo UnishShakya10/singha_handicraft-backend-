@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import Product from "../model/Product.js";
 import Order from "../model/Order.js";
 import Counter from "../model/Counter.js";
+import User from "../model/User.js";
+import { sendOrderEmails } from "../utils/sendOrderEmail.js";
 
 const httpError = (status, message) =>
   Object.assign(new Error(message), { status });
@@ -200,6 +202,12 @@ export const createOrder = async (req, res, next) => {
       }], { session });
     });
     res.status(201).json(createdOrder);
+
+    // Runs after the response, so an email problem never breaks the order
+    User.findById(req.user.id)
+      .select("fullName email")
+      .then((user) => sendOrderEmails(createdOrder, user))
+      .catch((err) => console.error("Order email failed:", err.message));
   } catch (error) {
     if (error.status) return res.status(error.status).json({ message: error.message });
     next(error);
