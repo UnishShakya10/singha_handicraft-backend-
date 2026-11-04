@@ -7,6 +7,15 @@ const orderItemSchema = new mongoose.Schema(
       ref: "Product",
       required: true,
     },
+    variantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    finish: {
+      type: String,
+      default: "Gold",
+      trim: true,
+    },
     name: {
       type: String,
       required: true,
@@ -21,7 +30,10 @@ const orderItemSchema = new mongoose.Schema(
       required: true,
       min: 1,
     },
-    image: String,
+    image: {
+      type: String,
+      default: "",
+    },
   },
   { _id: false }
 );
@@ -64,29 +76,24 @@ const orderSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ["cod","bank","wallet"],
+      enum: ["cod", "bank", "wallet"],
       default: "cod",
     },
-
-     // Transaction reference for bank or wallet payments
     paymentReference: {
       type: String,
       default: "",
       trim: true,
     },
-
     paymentStatus: {
       type: String,
       enum: ["pending", "paid", "failed"],
       default: "pending",
     },
-
     inventoryStatus: {
       type: String,
       enum: ["not_reserved", "reserved", "restored"],
       default: "not_reserved",
     },
-
     status: {
       type: String,
       enum: [
@@ -105,4 +112,5 @@ const orderSchema = new mongoose.Schema(
 );
 
 const Order = mongoose.model("Order", orderSchema);
+
 export default Order;

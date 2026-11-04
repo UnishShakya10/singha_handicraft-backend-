@@ -31,6 +31,56 @@ const getNextInvoiceNumber = async () => {
   return `SH-${String(counter.sequence).padStart(4, "0")}`;
 };
 
+// Restore stock to the correct product or variant.
+const restoreOrderInventory = async (order, session) => {
+  const quantities = new Map();
+
+  for (const item of order.items) {
+    const productId = String(item.product);
+    const variantId = item.variantId
+      ? String(item.variantId)
+      : "";
+
+    const key = `${productId}:${variantId}`;
+
+    quantities.set(
+      key,
+      (quantities.get(key) || 0) + item.quantity
+    );
+  }
+
+  for (const [key, quantity] of quantities) {
+    const [productId, variantId] = key.split(":");
+
+    if (variantId) {
+      await Product.updateOne(
+        {
+          _id: productId,
+          variants: {
+            $elemMatch: {
+              _id: variantId,
+            },
+          },
+        },
+        {
+          $inc: {
+            "variants.$.stock": quantity,
+          },
+        },
+        { session }
+      );
+    } else {
+      await Product.updateOne(
+        { _id: productId },
+        {
+          $inc: { stock: quantity },
+        },
+        { session }
+      );
+    }
+  }
+};
+
 // GET ALL ORDERS
 export const getAllOrders = async (req, res, next) => {
   try {
@@ -89,7 +139,9 @@ export const updateOrderStatus = async (req, res, next) => {
     await session.withTransaction(async () => {
       const order = await Order.findById(req.params.id).session(session);
 
-      if (!order) throw httpError(404, "Order not found");
+      if (!order) {
+        throw httpError(404, "Order not found");
+      }
 
       if (order.status === "cancelled" && status && status !== "cancelled") {
         throw httpError(409, "A cancelled order cannot be reopened.");
@@ -101,29 +153,13 @@ export const updateOrderStatus = async (req, res, next) => {
         order.inventoryStatus === "reserved";
 
       if (shouldRestoreStock) {
-        const quantities = new Map();
-
-        for (const item of order.items) {
-          const productId = String(item.product);
-
-          quantities.set(
-            productId,
-            (quantities.get(productId) || 0) + item.quantity
-          );
-        }
-
-        for (const [productId, quantity] of quantities) {
-          await Product.updateOne(
-            { _id: productId },
-            { $inc: { stock: quantity } },
-            { session }
-          );
-        }
-
+        await restoreOrderInventory(order, session);
         order.inventoryStatus = "restored";
       }
 
-      if (status !== undefined) order.status = status;
+      if (status !== undefined) {
+        order.status = status;
+      }
 
       if (paymentStatus !== undefined) {
         order.paymentStatus = paymentStatus;
@@ -192,15 +228,18 @@ export const createOrder = async (req, res, next) => {
     });
   }
 
-  const quantities = new Map();
+  // Group by product AND variant so different finishes
+  // are reserved independently.
+  const requestedItems = new Map();
 
   for (const item of items) {
-    const product =
+    const productId =
       item?.product ?? item?.productId ?? item?._id ?? item?.id;
 
+    const variantId = item?.variantId || null;
     const quantity = Number(item?.quantity ?? item?.qty);
 
-    if (!mongoose.Types.ObjectId.isValid(product)) {
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
       return res.status(400).json({
         message: "Each item must include a valid product ID",
       });
@@ -212,21 +251,36 @@ export const createOrder = async (req, res, next) => {
       });
     }
 
-    const productId = String(product);
+    if (
+      variantId &&
+      !mongoose.Types.ObjectId.isValid(variantId)
+    ) {
+      return res.status(400).json({
+        message: "Invalid product variant",
+      });
+    }
 
-    quantities.set(
-      productId,
-      (quantities.get(productId) || 0) + quantity
-    );
-  }
+    const normalizedProductId = String(productId);
+    const normalizedVariantId = variantId
+      ? String(variantId)
+      : "";
 
-  if (
-    [...quantities.values()].some(
-      (quantity) => !Number.isSafeInteger(quantity)
-    )
-  ) {
-    return res.status(400).json({
-      message: "Requested product quantity is too large",
+    const key = `${normalizedProductId}:${normalizedVariantId}`;
+
+    const existing = requestedItems.get(key);
+
+    const newQuantity = (existing?.quantity || 0) + quantity;
+
+    if (!Number.isSafeInteger(newQuantity)) {
+      return res.status(400).json({
+        message: "Requested product quantity is too large",
+      });
+    }
+
+    requestedItems.set(key, {
+      productId: normalizedProductId,
+      variantId: normalizedVariantId || null,
+      quantity: newQuantity,
     });
   }
 
@@ -238,49 +292,134 @@ export const createOrder = async (req, res, next) => {
     let createdOrder;
 
     await session.withTransaction(async () => {
+      const productIds = [
+        ...new Set(
+          [...requestedItems.values()].map(
+            (item) => item.productId
+          )
+        ),
+      ];
+
       const products = await Product.find({
-        _id: { $in: [...quantities.keys()] },
+        _id: { $in: productIds },
         isActive: true,
       }).session(session);
 
       const productMap = new Map(
-        products.map((product) => [String(product._id), product])
+        products.map((product) => [
+          String(product._id),
+          product,
+        ])
       );
 
       const orderItems = [];
 
-      for (const [productId, quantity] of quantities) {
+      for (const requested of requestedItems.values()) {
+        const { productId, variantId, quantity } = requested;
+
         const product = productMap.get(productId);
 
         if (!product) {
           throw httpError(400, "A product is unavailable.");
         }
 
-        const reservation = await Product.updateOne(
-          {
-            _id: product._id,
-            isActive: true,
-            stock: { $gte: quantity },
-          },
-          {
-            $inc: { stock: -quantity },
-          },
-          { session }
-        );
+        let price;
+        let image;
+        let finish = "Gold";
 
-        if (reservation.matchedCount !== 1) {
-          throw httpError(
-            409,
-            `${product.name} does not have enough stock available.`
+        // SELECTED VARIANT: Silver, Antique, etc.
+        if (variantId) {
+          const variant = product.variants.id(variantId);
+
+          if (!variant || variant.isActive === false) {
+            throw httpError(
+              400,
+              `The selected finish for ${product.name} is unavailable.`
+            );
+          }
+
+          if (Number(variant.stock) < quantity) {
+            throw httpError(
+              409,
+              `Only ${variant.stock} of ${product.name} (${variant.finish}) are available.`
+            );
+          }
+
+          const reservation = await Product.updateOne(
+            {
+              _id: product._id,
+              isActive: true,
+              variants: {
+                $elemMatch: {
+                  _id: variant._id,
+                  isActive: { $ne: false },
+                  stock: { $gte: quantity },
+                },
+              },
+            },
+            {
+              $inc: {
+                "variants.$.stock": -quantity,
+              },
+            },
+            { session }
           );
+
+          if (reservation.matchedCount !== 1) {
+            throw httpError(
+              409,
+              `${product.name} (${variant.finish}) does not have enough stock available.`
+            );
+          }
+
+          price = Number(variant.price);
+          finish = variant.finish;
+
+          // Use the selected variant image first.
+          image =
+            variant.images?.[0] ||
+            product.images?.[0] ||
+            "";
+        } else {
+          // DEFAULT PRODUCT: Gold
+          if (Number(product.stock) < quantity) {
+            throw httpError(
+              409,
+              `${product.name} does not have enough stock available.`
+            );
+          }
+
+          const reservation = await Product.updateOne(
+            {
+              _id: product._id,
+              isActive: true,
+              stock: { $gte: quantity },
+            },
+            {
+              $inc: { stock: -quantity },
+            },
+            { session }
+          );
+
+          if (reservation.matchedCount !== 1) {
+            throw httpError(
+              409,
+              `${product.name} does not have enough stock available.`
+            );
+          }
+
+          price = Number(product.price);
+          image = product.images?.[0] || "";
         }
 
         orderItems.push({
           product: product._id,
+          variantId: variantId || null,
           name: product.name,
-          price: product.price,
+          finish,
+          price,
           quantity,
-          image: product.images?.[0] || "",
+          image,
         });
       }
 
@@ -308,11 +447,10 @@ export const createOrder = async (req, res, next) => {
       );
     });
 
-    // Send order response to customer
+    // Respond after successful order creation.
     res.status(201).json(createdOrder);
 
-    // Send emails after successful order creation
-    // Email failures will not interrupt the order.
+    // Email failures must not interrupt the order.
     User.findById(req.user.id)
       .select("fullName email")
       .then((user) => sendOrderEmails(createdOrder, user))
@@ -385,30 +523,12 @@ export const deleteOrder = async (req, res, next) => {
         throw httpError(404, "Order not found");
       }
 
-      // Restore reserved stock when appropriate
       const shouldRestoreStock =
         order.inventoryStatus === "reserved" &&
         order.status !== "delivered";
 
       if (shouldRestoreStock) {
-        const quantities = new Map();
-
-        for (const item of order.items) {
-          const productId = String(item.product);
-
-          quantities.set(
-            productId,
-            (quantities.get(productId) || 0) + item.quantity
-          );
-        }
-
-        for (const [productId, quantity] of quantities) {
-          await Product.updateOne(
-            { _id: productId },
-            { $inc: { stock: quantity } },
-            { session }
-          );
-        }
+        await restoreOrderInventory(order, session);
       }
 
       await Order.deleteOne({ _id: order._id }).session(session);
@@ -438,7 +558,6 @@ export const cancelMyOrder = async (req, res, next) => {
     let cancelledOrder;
 
     await session.withTransaction(async () => {
-      // Only allows cancellation of the logged-in user's order
       const order = await Order.findOne({
         _id: req.params.id,
         user: req.user.id,
@@ -458,25 +577,7 @@ export const cancelMyOrder = async (req, res, next) => {
       }
 
       if (order.inventoryStatus === "reserved") {
-        const quantities = new Map();
-
-        for (const item of order.items) {
-          const productId = String(item.product);
-
-          quantities.set(
-            productId,
-            (quantities.get(productId) || 0) + item.quantity
-          );
-        }
-
-        for (const [productId, quantity] of quantities) {
-          await Product.updateOne(
-            { _id: productId },
-            { $inc: { stock: quantity } },
-            { session }
-          );
-        }
-
+        await restoreOrderInventory(order, session);
         order.inventoryStatus = "restored";
       }
 
