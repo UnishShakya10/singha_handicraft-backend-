@@ -1,5 +1,6 @@
 
 import nodemailer from "nodemailer";
+import { createInvoicePdf } from "./invoicePdf.js";
 
 // ==========================================
 // 1. GMAIL SMTP TRANSPORTER
@@ -107,10 +108,6 @@ const buildHtml = (
   { heading, intro, showButton, showCustomer }
 ) => {
   const address = order.shippingAddress || {};
-
-  const frontend = (process.env.FRONTEND_URL || "").replace(/\/+$/, "");
-
-  const invoiceLink = `${frontend}/invoice/${encodeURIComponent(order._id)}`;
 
   const rows = (order.items || [])
     .map((item) => {
@@ -265,13 +262,7 @@ const buildHtml = (
           showButton
             ? `
               <p style="margin:28px 0 0;">
-                <a href="${esc(invoiceLink)}" style="display:inline-block;background:#14110d;color:#ffffff;text-decoration:none;padding:12px 22px;font-size:13px;letter-spacing:1px;text-transform:uppercase;">
-                  View invoice
-                </a>
-              </p>
-
-              <p style="margin:10px 0 0;font-size:12px;color:#999;">
-                You'll need to be logged in to view your invoice.
+                <strong style="font-size:13px;color:#555;">Your PDF invoice is attached to this email.</strong>
               </p>
             `
             : ""
@@ -301,11 +292,20 @@ export const sendOrderEmails = async (order, user) => {
 
     // Customer order confirmation.
     if (user?.email) {
+      const pdf = await createInvoicePdf(order, user);
+
       jobs.push(
         transporter.sendMail({
           from,
           to: user.email,
           subject: `Your order ${order.invoiceNumber || order._id} is confirmed`,
+          attachments: [
+            {
+              filename: `invoice-${order.invoiceNumber || order._id}.pdf`,
+              content: pdf,
+              contentType: "application/pdf",
+            },
+          ],
           html: buildHtml(order, user, {
             heading: "Thank you for your order",
             intro: "We've received your order and will confirm it shortly.",
