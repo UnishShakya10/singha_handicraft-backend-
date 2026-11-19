@@ -28,3 +28,13 @@ transactions. The database must run as a replica set or sharded cluster;
 standalone MongoDB servers do not support these transactions. Product
 availability shown in the browser is informational; the order endpoint performs
 the authoritative stock check and reservation.
+
+## Order confirmation emails
+
+Set `EMAIL_USER` to the Gmail account used for SMTP and `EMAIL_PASS` to its
+Google app password (not the account password). The sender removes spaces from
+the app password, so either the grouped or ungrouped format works. If
+`EMAIL_FROM` is set, its address must be the authenticated Gmail address or a
+Gmail alias configured on that account. `SHOP_EMAIL` is optional and receives
+new-order notifications; `FRONTEND_URL` and `BACKEND_URL` are used for links
+and product images in the email.

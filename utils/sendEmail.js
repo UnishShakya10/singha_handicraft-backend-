@@ -1,6 +1,5 @@
 
 import nodemailer from "nodemailer";
-import { createInvoicePdf } from "./invoicePdf.js";
 
 // ==========================================
 // 1. GMAIL SMTP TRANSPORTER
@@ -13,7 +12,7 @@ const createTransporter = () => {
     secure: true,
     auth: {
       user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
+      pass: process.env.EMAIL_PASS.replace(/\s+/g, ""),
     },
   });
 };
@@ -108,6 +107,10 @@ const buildHtml = (
   { heading, intro, showButton, showCustomer }
 ) => {
   const address = order.shippingAddress || {};
+
+  const frontend = (process.env.FRONTEND_URL || "").replace(/\/+$/, "");
+
+  const invoiceLink = `${frontend}/invoice/${encodeURIComponent(order._id)}`;
 
   const rows = (order.items || [])
     .map((item) => {
@@ -262,7 +265,13 @@ const buildHtml = (
           showButton
             ? `
               <p style="margin:28px 0 0;">
-                <strong style="font-size:13px;color:#555;">Your PDF invoice is attached to this email.</strong>
+                <a href="${esc(invoiceLink)}" style="display:inline-block;background:#14110d;color:#ffffff;text-decoration:none;padding:12px 22px;font-size:13px;letter-spacing:1px;text-transform:uppercase;">
+                  View invoice
+                </a>
+              </p>
+
+              <p style="margin:10px 0 0;font-size:12px;color:#999;">
+                You'll need to be logged in to view your invoice.
               </p>
             `
             : ""
@@ -292,20 +301,11 @@ export const sendOrderEmails = async (order, user) => {
 
     // Customer order confirmation.
     if (user?.email) {
-      const pdf = await createInvoicePdf(order, user);
-
       jobs.push(
         transporter.sendMail({
           from,
           to: user.email,
           subject: `Your order ${order.invoiceNumber || order._id} is confirmed`,
-          attachments: [
-            {
-              filename: `invoice-${order.invoiceNumber || order._id}.pdf`,
-              content: pdf,
-              contentType: "application/pdf",
-            },
-          ],
           html: buildHtml(order, user, {
             heading: "Thank you for your order",
             intro: "We've received your order and will confirm it shortly.",
@@ -346,6 +346,61 @@ export const sendOrderEmails = async (order, user) => {
     });
   } catch (error) {
     console.error("Order email service failed:", error.message);
+  }
+};
+
+const ORDER_STATUS_EMAILS = {
+  confirmed: {
+    subject: "is confirmed",
+    heading: "Your order is confirmed",
+    intro: "Our team has confirmed your order and is preparing it.",
+  },
+  delivered: {
+    subject: "has been delivered",
+    heading: "Your order has been delivered",
+    intro: "Your order has been marked as delivered. We hope you enjoy it.",
+  },
+  cancelled: {
+    subject: "has been cancelled",
+    heading: "Your order has been cancelled",
+    intro: "Your order has been cancelled. Please contact us if you have questions.",
+  },
+};
+
+export const sendOrderStatusEmail = async (order, user) => {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.warn("Gmail credentials are missing. Skipping order status email.");
+    return;
+  }
+
+  if (!user?.email) {
+    console.warn("Customer email is missing. Order status email skipped.");
+    return;
+  }
+
+  const emailContent = ORDER_STATUS_EMAILS[order.status];
+  if (!emailContent) {
+    console.warn(`No customer email template for order status "${order.status}".`);
+    return;
+  }
+
+  try {
+    const transporter = createTransporter();
+    const result = await transporter.sendMail({
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      to: user.email,
+      subject: `Your order ${order.invoiceNumber || order._id} ${emailContent.subject}`,
+      html: buildHtml(order, user, {
+        heading: emailContent.heading,
+        intro: emailContent.intro,
+        showButton: true,
+        showCustomer: false,
+      }),
+    });
+
+    console.log("Order status email sent:", result.messageId);
+  } catch (error) {
+    console.error("Order status email failed:", error.message);
   }
 };
 

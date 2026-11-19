@@ -6,7 +6,6 @@ import {
   getAllOrders,
   getMyOrders,
   getOrderById,
-  getOrderInvoicePdf,
   updateOrderStatus,
 } from "../controllers/orderControllers.js";
 import { authMiddleware } from "../middleware/authMiddleware.js";
@@ -18,7 +17,6 @@ router.use(authMiddleware);
 router.get("/my", getMyOrders);
 router.get("/", adminMiddleware, getAllOrders);
 router.get("/admin", adminMiddleware, getAllOrders);
-router.get("/:id/invoice", getOrderInvoicePdf);
 router.get("/:id", getOrderById);
 router.patch("/:id/cancel", cancelMyOrder);
 router.patch("/:id", adminMiddleware, updateOrderStatus);

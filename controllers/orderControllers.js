@@ -4,8 +4,10 @@ import Product from "../model/Product.js";
 import Order from "../model/Order.js";
 import Counter from "../model/Counter.js";
 import User from "../model/User.js";
-import { sendOrderEmails } from "../utils/sendEmail.js";
-import { createInvoicePdf } from "../utils/invoicePdf.js";
+import {
+  sendOrderStatusEmail,
+  sendOrderEmails,
+} from "../utils/sendEmail.js";
 
 const httpError = (status, message) =>
   Object.assign(new Error(message), { status });
@@ -136,6 +138,7 @@ export const updateOrderStatus = async (req, res, next) => {
 
   try {
     let updatedOrder;
+    let emailStatusChanged = false;
 
     await session.withTransaction(async () => {
       const order = await Order.findById(req.params.id).session(session);
@@ -152,6 +155,9 @@ export const updateOrderStatus = async (req, res, next) => {
         status === "cancelled" &&
         order.status !== "cancelled" &&
         order.inventoryStatus === "reserved";
+      emailStatusChanged =
+        ["confirmed", "delivered", "cancelled"].includes(status) &&
+        order.status !== status;
 
       if (shouldRestoreStock) {
         await restoreOrderInventory(order, session);
@@ -172,6 +178,10 @@ export const updateOrderStatus = async (req, res, next) => {
         .populate("user", "fullName email")
         .session(session);
     });
+
+    if (emailStatusChanged) {
+      await sendOrderStatusEmail(updatedOrder, updatedOrder.user);
+    }
 
     res.json(updatedOrder);
   } catch (error) {
@@ -507,46 +517,6 @@ export const getOrderById = async (req, res, next) => {
     }
 
     res.json(order);
-  } catch (error) {
-    next(error);
-  }
-};
-
-// GET ORDER INVOICE PDF
-export const getOrderInvoicePdf = async (req, res, next) => {
-  try {
-    const isAdmin =
-      String(req.user?.role || "").toLowerCase() === "admin";
-
-    const order = await Order.findById(req.params.id).populate(
-      "user",
-      "fullName email"
-    );
-
-    if (!order) {
-      return res.status(404).json({
-        message: "Order not found",
-      });
-    }
-
-    const orderUserId = String(order.user?._id || order.user);
-    if (!isAdmin && orderUserId !== String(req.user.id)) {
-      return res.status(404).json({
-        message: "Order not found",
-      });
-    }
-
-    const pdf = await createInvoicePdf(order, order.user);
-    const invoiceNumber = String(order.invoiceNumber || order._id);
-    const disposition = req.query.download === "true" ? "attachment" : "inline";
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `${disposition}; filename="invoice-${invoiceNumber}.pdf"`
-    );
-    res.setHeader("Content-Length", pdf.length);
-    res.send(pdf);
   } catch (error) {
     next(error);
   }
