@@ -2,6 +2,7 @@
 import User from "../model/User.js";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import Order from "../model/Order.js";
 import { sendLoginEmail } from "../utils/sendEmail.js";
 
 const publicUser = (user) => ({
@@ -111,7 +112,34 @@ export const getMe = async (req, res) => {
         });
     }
 
-    res.json(user);
+    let shippingAddress = user.shippingAddress?.toObject?.() ||
+        user.shippingAddress || {};
+
+    if (!Object.values(shippingAddress).some((value) => String(value || "").trim())) {
+        const latestOrder = await Order.findOne({ user: user._id })
+            .sort({ createdAt: -1 })
+            .select("shippingAddress");
+
+        shippingAddress = latestOrder?.shippingAddress?.toObject?.() ||
+            latestOrder?.shippingAddress ||
+            shippingAddress;
+    }
+
+    res.json({
+        ...user.toObject(),
+        checkout: {
+            fullName: user.fullName || shippingAddress.fullName || "",
+            email: user.email || "",
+            shippingAddress: {
+                fullName: shippingAddress.fullName || user.fullName || "",
+                phone: shippingAddress.phone || "",
+                address: shippingAddress.address || "",
+                city: shippingAddress.city || "",
+                state: shippingAddress.state || "",
+                postalCode: shippingAddress.postalCode || "",
+            },
+        },
+    });
 };
 
 // GET USER BY ID
@@ -168,6 +196,17 @@ export const updateUser = async (req, res) => {
 
     if (typeof req.body.avatar === "string") {
         updates.avatar = req.body.avatar;
+    }
+
+    if (req.body.shippingAddress && typeof req.body.shippingAddress === "object") {
+        const address = req.body.shippingAddress;
+        updates.shippingAddress = {};
+
+        for (const field of ["fullName", "phone", "address", "city", "state", "postalCode"]) {
+            if (typeof address[field] === "string") {
+                updates.shippingAddress[field] = address[field].trim();
+            }
+        }
     }
 
     const user = await User.findByIdAndUpdate(

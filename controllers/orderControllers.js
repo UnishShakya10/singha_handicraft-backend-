@@ -458,6 +458,19 @@ export const createOrder = async (req, res, next) => {
       );
     });
 
+    await User.findByIdAndUpdate(req.user.id, {
+      $set: {
+        shippingAddress: {
+          fullName: shippingAddress.fullName,
+          phone: shippingAddress.phone,
+          address: shippingAddress.address,
+          city: shippingAddress.city,
+          state: shippingAddress.state,
+          postalCode: shippingAddress.postalCode || "",
+        },
+      },
+    });
+
     // Respond after successful order creation.
     res.status(201).json(createdOrder);
 

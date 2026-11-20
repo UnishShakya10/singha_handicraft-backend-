@@ -9,6 +9,14 @@ const userSchema = new Schema({
     },
     password: String,
     avatar: String,
+    shippingAddress: {
+        fullName: { type: String, default: "" },
+        phone: { type: String, default: "" },
+        address: { type: String, default: "" },
+        city: { type: String, default: "" },
+        state: { type: String, default: "" },
+        postalCode: { type: String, default: "" },
+    },
     role: {
         type: String,
         enum: ["user", "admin"],

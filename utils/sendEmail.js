@@ -1,5 +1,6 @@
 
 import nodemailer from "nodemailer";
+import PDFDocument from "pdfkit";
 
 // ==========================================
 // 1. GMAIL SMTP TRANSPORTER
@@ -37,6 +38,170 @@ const esc = (value) =>
 
 const money = (amount) =>
   `NPR ${Number(amount || 0).toLocaleString("en-US")}`;
+
+// ==========================================
+// 3. PDF INVOICE
+// ==========================================
+
+const buildInvoicePdf = async (order, user) => {
+  const chunks = [];
+  const doc = new PDFDocument({
+    size: "A4",
+    margin: 50,
+    info: {
+      Title: `Invoice ${order.invoiceNumber || order._id}`,
+      Author: "Singha Handicraft",
+      Subject: "Order invoice",
+    },
+  });
+
+  const pdfBuffer = new Promise((resolve, reject) => {
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+
+  const invoiceNumber = order.invoiceNumber || order._id;
+  const address = order.shippingAddress || {};
+  const orderDate = order.createdAt
+    ? new Date(order.createdAt).toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    : new Date().toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+  const payment =
+    PAYMENT_LABELS[order.paymentMethod] ||
+    order.paymentMethod ||
+    "Not specified";
+
+  doc
+    .fillColor("#14110d")
+    .font("Helvetica-Bold")
+    .fontSize(22)
+    .text("SINGHA HANDICRAFT", 50, 50);
+
+  doc
+    .fillColor("#777777")
+    .font("Helvetica")
+    .fontSize(10)
+    .text("INVOICE", 50, 78)
+    .text(`Invoice: ${invoiceNumber}`, 50, 94)
+    .text(`Date: ${orderDate}`, 50, 108);
+
+  doc
+    .fillColor("#14110d")
+    .font("Helvetica-Bold")
+    .fontSize(11)
+    .text("BILL TO", 50, 145);
+
+  doc
+    .fillColor("#333333")
+    .font("Helvetica")
+    .fontSize(10)
+    .text(address.fullName || user?.fullName || user?.name || "Customer", 50, 162)
+    .text(address.address || "", 50, 177)
+    .text(
+      [address.city, address.state, address.postalCode].filter(Boolean).join(", "),
+      50,
+      192
+    )
+    .text(address.phone || "", 50, 207);
+
+  const tableTop = 250;
+  doc
+    .fillColor("#c9a227")
+    .rect(50, tableTop - 8, 495, 28)
+    .fill();
+
+  doc
+    .fillColor("#ffffff")
+    .font("Helvetica-Bold")
+    .fontSize(9)
+    .text("ITEM", 60, tableTop)
+    .text("QTY", 360, tableTop)
+    .text("PRICE", 405, tableTop)
+    .text("AMOUNT", 475, tableTop);
+
+  let y = tableTop + 32;
+
+  for (const item of order.items || []) {
+    if (y > 700) {
+      doc.addPage();
+      y = 50;
+    }
+
+    const lineAmount =
+      Number(item.price || 0) * Number(item.quantity || 0);
+    const name = item.name || "Product";
+    const finish = item.finish ? `Finish: ${item.finish}` : "";
+
+    doc
+      .fillColor("#14110d")
+      .font("Helvetica-Bold")
+      .fontSize(10)
+      .text(name, 60, y, { width: 290 });
+
+    if (finish) {
+      doc
+        .fillColor("#777777")
+        .font("Helvetica")
+        .fontSize(8)
+        .text(finish, 60, y + 14);
+    }
+
+    doc
+      .fillColor("#333333")
+      .font("Helvetica")
+      .fontSize(9)
+      .text(String(item.quantity || 0), 360, y)
+      .text(money(item.price), 405, y, { width: 60, align: "right" })
+      .text(money(lineAmount), 475, y, { width: 70, align: "right" });
+
+    doc
+      .strokeColor("#eeeeee")
+      .lineWidth(1)
+      .moveTo(50, y + 34)
+      .lineTo(545, y + 34)
+      .stroke();
+
+    y += 48;
+  }
+
+  if (y > 690) {
+    doc.addPage();
+    y = 50;
+  }
+
+  doc
+    .fillColor("#14110d")
+    .font("Helvetica-Bold")
+    .fontSize(12)
+    .text("TOTAL", 405, y)
+    .text(money(order.totalAmount), 475, y, { width: 70, align: "right" });
+
+  doc
+    .fillColor("#777777")
+    .font("Helvetica")
+    .fontSize(9)
+    .text(`Payment method: ${payment}`, 50, y + 28)
+    .text(`Payment status: ${order.paymentStatus || "pending"}`, 50, y + 43);
+
+  doc
+    .fillColor("#777777")
+    .fontSize(8)
+    .text("Thank you for shopping with Singha Handicraft.", 50, 760, {
+      width: 495,
+      align: "center",
+    });
+
+  doc.end();
+  return pdfBuffer;
+};
 
 // Get product image from the order item.
 const getProductImage = (item) => {
@@ -97,6 +262,49 @@ const absoluteImage = (value) => {
   return url.replace(/^http:\/\//i, "https://");
 };
 
+const buildEmailImageAssets = async (order) => {
+  const sources = [];
+  const attachments = [];
+
+  for (const [index, item] of (order.items || []).entries()) {
+    const imageUrl = absoluteImage(getProductImage(item));
+    if (!imageUrl) continue;
+
+    try {
+      const response = await fetch(imageUrl, {
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Image fetch failed: ${response.status}`);
+      }
+
+      const contentType =
+        response.headers.get("content-type") || "image/jpeg";
+
+      if (!contentType.startsWith("image/")) continue;
+
+      const cid = `product-${index}@singha-handicraft`;
+      sources[index] = `cid:${cid}`;
+      attachments.push({
+        filename: `product-${index + 1}.${contentType.includes("png")
+          ? "png"
+          : contentType.includes("webp")
+            ? "webp"
+            : "jpg"}`,
+        content: Buffer.from(await response.arrayBuffer()),
+        contentType,
+        cid,
+      });
+    } catch (error) {
+      sources[index] = imageUrl;
+      console.warn(`Could not embed product image ${index + 1}:`, error.message);
+    }
+  }
+
+  return { sources, attachments };
+};
+
 // ==========================================
 // 3. ORDER EMAIL HTML
 // ==========================================
@@ -104,17 +312,13 @@ const absoluteImage = (value) => {
 const buildHtml = (
   order,
   user,
-  { heading, intro, showButton, showCustomer }
+  { heading, intro, showCustomer, imageSources = [] }
 ) => {
   const address = order.shippingAddress || {};
 
-  const frontend = (process.env.FRONTEND_URL || "").replace(/\/+$/, "");
-
-  const invoiceLink = `${frontend}/invoice/${encodeURIComponent(order._id)}`;
-
   const rows = (order.items || [])
-    .map((item) => {
-      const image = absoluteImage(getProductImage(item));
+    .map((item, index) => {
+      const image = imageSources[index] || absoluteImage(getProductImage(item));
 
       const finish = item.finish || "Gold";
 
@@ -261,22 +465,6 @@ const buildHtml = (
             : ""
         }
 
-        ${
-          showButton
-            ? `
-              <p style="margin:28px 0 0;">
-                <a href="${esc(invoiceLink)}" style="display:inline-block;background:#14110d;color:#ffffff;text-decoration:none;padding:12px 22px;font-size:13px;letter-spacing:1px;text-transform:uppercase;">
-                  View invoice
-                </a>
-              </p>
-
-              <p style="margin:10px 0 0;font-size:12px;color:#999;">
-                You'll need to be logged in to view your invoice.
-              </p>
-            `
-            : ""
-        }
-
       </div>
     </div>
   `;
@@ -298,9 +486,16 @@ export const sendOrderEmails = async (order, user) => {
     const from = process.env.EMAIL_FROM || process.env.EMAIL_USER;
 
     const jobs = [];
+    const { sources: imageSources, attachments: imageAttachments } =
+      await buildEmailImageAssets(order);
 
     // Customer order confirmation.
     if (user?.email) {
+      const invoicePdf = await buildInvoicePdf(order, user);
+      const safeInvoiceNumber =
+        String(order.invoiceNumber || order._id)
+          .replace(/[^a-zA-Z0-9_-]+/g, "-");
+
       jobs.push(
         transporter.sendMail({
           from,
@@ -309,9 +504,17 @@ export const sendOrderEmails = async (order, user) => {
           html: buildHtml(order, user, {
             heading: "Thank you for your order",
             intro: "We've received your order and will confirm it shortly.",
-            showButton: true,
             showCustomer: false,
+            imageSources,
           }),
+          attachments: [
+            {
+              filename: `Invoice-${safeInvoiceNumber}.pdf`,
+              content: invoicePdf,
+              contentType: "application/pdf",
+            },
+            ...imageAttachments,
+          ],
         })
       );
     } else {
@@ -328,9 +531,10 @@ export const sendOrderEmails = async (order, user) => {
           html: buildHtml(order, user, {
             heading: "New order received",
             intro: "A customer just placed an order.",
-            showButton: false,
             showCustomer: true,
+            imageSources,
           }),
+          attachments: imageAttachments,
         })
       );
     }
@@ -386,6 +590,21 @@ export const sendOrderStatusEmail = async (order, user) => {
 
   try {
     const transporter = createTransporter();
+    const { sources: imageSources, attachments: imageAttachments } =
+      await buildEmailImageAssets(order);
+    const attachments =
+      order.status === "confirmed"
+        ? [
+            {
+              filename: `Invoice-${String(order.invoiceNumber || order._id)
+                .replace(/[^a-zA-Z0-9_-]+/g, "-")}.pdf`,
+              content: await buildInvoicePdf(order, user),
+              contentType: "application/pdf",
+            },
+            ...imageAttachments,
+          ]
+        : imageAttachments;
+
     const result = await transporter.sendMail({
       from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
       to: user.email,
@@ -393,9 +612,10 @@ export const sendOrderStatusEmail = async (order, user) => {
       html: buildHtml(order, user, {
         heading: emailContent.heading,
         intro: emailContent.intro,
-        showButton: true,
         showCustomer: false,
+        imageSources,
       }),
+      attachments,
     });
 
     console.log("Order status email sent:", result.messageId);
